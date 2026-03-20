@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>担当件数ダッシュボード</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Yu Gothic', sans-serif; background: #fff; color: #1a1a1a; padding: 1.5rem 2rem; }
+  .meta { font-size: 12px; color: #888; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .update-btn { font-size: 12px; padding: 5px 14px; border-radius: 8px; border: 1px solid #ccc; background: #fff; color: #444; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .update-btn:hover { background: #f5f5f5; }
+  .update-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .spinner { width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #555; border-radius: 50%; animation: spin 0.7s linear infinite; display: none; }
+  .spinner.on { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 2rem; }
+  .card { background: #f7f7f5; border-radius: 8px; padding: 1rem 1.25rem; }
+  .card-label { font-size: 11px; color: #666; margin-bottom: 6px; }
+  .card-value { font-size: 28px; font-weight: 500; line-height: 1; }
+  .card-sub { font-size: 11px; color: #999; margin-top: 5px; }
+  .tabs { display: flex; border-bottom: 1px solid #e5e5e5; margin-bottom: 1.5rem; }
+  .tab { font-size: 13px; padding: 8px 20px; cursor: pointer; color: #888; background: transparent; border: none; border-bottom: 2.5px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+  .tab.active { color: #1a1a1a; border-bottom-color: #1a1a1a; font-weight: 500; }
+  .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+  .ctrl-lbl { font-size: 11px; color: #999; }
+  .sort-btn { font-size: 12px; padding: 4px 12px; border-radius: 8px; border: 1px solid #ddd; background: transparent; color: #666; cursor: pointer; }
+  .sort-btn.active { background: #f0f0ee; color: #1a1a1a; border-color: #aaa; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; color: #666; align-items: center; }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .leg-sq { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .chart-wrap { position: relative; width: 100%; }
+  .updated-at { font-size: 11px; color: #bbb; }
+  .error-msg { font-size: 13px; color: #c00; padding: 12px; background: #fff0f0; border-radius: 8px; }
+</style>
+</head>
+<body>
+
+<div class="meta">
+  <span>パイプライン 1201582819 ／ ステージ 2231196368</span>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span class="updated-at" id="updated-at">読み込み中...</span>
+    <button class="update-btn" id="update-btn" onclick="manualUpdate()">
+      <span class="spinner" id="spinner"></span>
+      今すぐ更新
+    </button>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card"><p class="card-label">PM</p><p class="card-value" id="pm-total">—</p><p class="card-sub" id="pm-m">—</p></div>
+  <div class="card"><p class="card-label">ディレクター</p><p class="card-value" id="dir-total">—</p><p class="card-sub" id="dir-m">—</p></div>
+  <div class="card"><p class="card-label">アシスタント</p><p class="card-value" id="ast-total">—</p><p class="card-sub" id="ast-m">—</p></div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="setTab('all',this)">全役割</button>
+  <button class="tab" onclick="setTab('pm',this)">PM</button>
+  <button class="tab" onclick="setTab('dir',this)">ディレクター</button>
+  <button class="tab" onclick="setTab('ast',this)">アシスタント</button>
+  <button class="tab" onclick="setTab('deals',this)">取引数</button>
+</div>
+
+<div class="controls">
+  <span class="ctrl-lbl">並び順：</span>
+  <button class="sort-btn active" id="sb-0" onclick="setSort(0,this)">合計件数順</button>
+  <button class="sort-btn" id="sb-1" onclick="setSort(1,this)">役割件数順</button>
+</div>
+
+<div id="legend-area" class="legend"></div>
+<div id="error-area"></div>
+<div class="chart-wrap"><canvas id="mainChart"></canvas></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+// ============================================================
+// ★ ここだけ変更してください
+const DATA_URL    = 'https://kumamon-n8n.xvps.jp/webhook/hubspot-dashboard-data';
+const UPDATE_URL  = 'https://kumamon-n8n.xvps.jp/webhook/hubspot-dashboard-update';
+// ============================================================
+
+let pmC = {}, dirC = {}, astC = {}, dealSet = {};
+let allN = [];
+let curTab = 'all', curSortIdx = 0, chartInst = null;
+
+const TABS = {
+  all: {
+    sortLabels: ['合計件数順'],
+    sortFns: [(n) => (pmC[n]||0)+(dirC[n]||0)+(astC[n]||0)],
+    names: () => allN,
+    datasets: (names) => [
+      { label:'PM', data:names.map(n=>pmC[n]||0), backgroundColor:'#5DCAA5' },
+      { label:'ディレクター', data:names.map(n=>dirC[n]||0), backgroundColor:'#7F77DD' },
+      { label:'アシスタント', data:names.map(n=>astC[n]||0), backgroundColor:'#EF9F27' },
+    ],
+    legend: [{c:'#5DCAA5',l:'PM'},{c:'#7F77DD',l:'ディレクター'},{c:'#EF9F27',l:'アシスタント'}]
+  },
+  pm: {
+    sortLabels: ['合計件数順','PM件数順'],
+    sortFns: [(n)=>(pmC[n]||0)+(dirC[n]||0)+(astC[n]||0),(n)=>pmC[n]||0],
+    names: () => Object.keys(pmC),
+    datasets: (names) => [{ label:'PM件数', data:names.map(n=>pmC[n]||0), backgroundColor:'#5DCAA5' }],
+    legend: [{c:'#5DCAA5',l:'PM件数'}]
+  },
+  dir: {
+    sortLabels: ['合計件数順','ディレクター件数順'],
+    sortFns: [(n)=>(pmC[n]||0)+(dirC[n]||0)+(astC[n]||0),(n)=>dirC[n]||0],
+    names: () => Object.keys(dirC),
+    datasets: (names) => [{ label:'ディレクター件数', data:names.map(n=>dirC[n]||0), backgroundColor:'#7F77DD' }],
+    legend: [{c:'#7F77DD',l:'ディレクター件数'}]
+  },
+  ast: {
+    sortLabels: ['合計件数順','アシスタント件数順'],
+    sortFns: [(n)=>(pmC[n]||0)+(dirC[n]||0)+(astC[n]||0),(n)=>astC[n]||0],
+    names: () => Object.keys(astC),
+    datasets: (names) => [{ label:'アシスタント件数', data:names.map(n=>astC[n]||0), backgroundColor:'#EF9F27' }],
+    legend: [{c:'#EF9F27',l:'アシスタント件数'}]
+  },
+  deals: {
+    sortLabels: ['取引数順'],
+    sortFns: [(n)=>dealSet[n]||0],
+    names: () => allN,
+    datasets: (names) => [{ label:'取引数', data:names.map(n=>dealSet[n]||0), backgroundColor:'#E87B6B' }],
+    legend: [{c:'#E87B6B',l:'取引数（担当会社数）'}]
+  }
+};
+
+function applyData(data) {
+  pmC = data.pm || {};
+  dirC = data.director || {};
+  astC = data.assistant || {};
+  dealSet = data.deals || {};
+  allN = [...new Set([...Object.keys(pmC),...Object.keys(dirC),...Object.keys(astC)])];
+
+  document.getElementById('pm-total').textContent = Object.values(pmC).reduce((a,b)=>a+b,0);
+  document.getElementById('pm-m').textContent = Object.keys(pmC).length + '名が担当';
+  document.getElementById('dir-total').textContent = Object.values(dirC).reduce((a,b)=>a+b,0);
+  document.getElementById('dir-m').textContent = Object.keys(dirC).length + '名が担当';
+  document.getElementById('ast-total').textContent = Object.values(astC).reduce((a,b)=>a+b,0);
+  document.getElementById('ast-m').textContent = Object.keys(astC).length + '名が担当';
+
+  if (data.updated_at) {
+    const d = new Date(data.updated_at);
+    document.getElementById('updated-at').textContent = '最終更新: ' + d.toLocaleString('ja-JP');
+  }
+  buildChart();
+}
+
+async function loadData() {
+  try {
+    const res = await fetch(DATA_URL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    document.getElementById('error-area').innerHTML = '';
+    applyData(data);
+  } catch(e) {
+    document.getElementById('error-area').innerHTML = '<p class="error-msg">データ取得に失敗しました: ' + e.message + '</p>';
+  }
+}
+
+async function manualUpdate() {
+  const btn = document.getElementById('update-btn');
+  const spinner = document.getElementById('spinner');
+  btn.disabled = true;
+  spinner.classList.add('on');
+  try {
+    const res = await fetch(UPDATE_URL, { method: 'POST' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    document.getElementById('error-area').innerHTML = '';
+    applyData(data);
+  } catch(e) {
+    document.getElementById('error-area').innerHTML = '<p class="error-msg">更新に失敗しました: ' + e.message + '</p>';
+  } finally {
+    btn.disabled = false;
+    spinner.classList.remove('on');
+  }
+}
+
+function buildLegend(cfg) {
+  document.getElementById('legend-area').innerHTML = cfg.legend.map(l =>
+    `<span><span class="leg-sq" style="background:${l.c}"></span>${l.l}</span>`).join('');
+}
+
+function buildSortBtns(cfg) {
+  const b0 = document.getElementById('sb-0');
+  const b1 = document.getElementById('sb-1');
+  b0.textContent = cfg.sortLabels[0];
+  b0.classList.toggle('active', curSortIdx === 0);
+  if (cfg.sortLabels.length > 1) {
+    b1.textContent = cfg.sortLabels[1];
+    b1.style.display = '';
+    b1.classList.toggle('active', curSortIdx === 1);
+  } else {
+    b1.style.display = 'none';
+    curSortIdx = 0;
+  }
+}
+
+function buildChart() {
+  const cfg = TABS[curTab];
+  const baseNames = cfg.names();
+  const idx = Math.min(curSortIdx, cfg.sortFns.length - 1);
+  const names = [...baseNames].sort((a,b) => cfg.sortFns[idx](b) - cfg.sortFns[idx](a));
+  const h = Math.max(420, names.length * 38 + 80);
+  const canvas = document.getElementById('mainChart');
+  canvas.parentElement.style.height = h + 'px';
+  buildLegend(cfg);
+  buildSortBtns(cfg);
+  if (chartInst) { chartInst.destroy(); }
+  chartInst = new Chart(canvas, {
+    type: 'bar',
+    data: { labels: names, datasets: cfg.datasets(names) },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label(ctx) { return ' ' + ctx.dataset.label + ': ' + ctx.parsed.x + '件'; } } }
+      },
+      scales: {
+        x: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { color: '#888', font: { size: 11 }, stepSize: 1 } },
+        y: { grid: { display: false }, ticks: { color: '#555', font: { size: 12 } } }
+      }
+    }
+  });
+}
+
+function setTab(tab, el) {
+  curTab = tab; curSortIdx = 0;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  buildChart();
+}
+
+function setSort(idx, el) {
+  curSortIdx = idx;
+  document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  buildChart();
+}
+
+loadData();
+</script>
+</body>
+</html>
