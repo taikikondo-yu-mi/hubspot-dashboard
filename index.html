@@ -32,6 +32,40 @@
   .chart-wrap { position: relative; width: 100%; }
   .updated-at { font-size: 11px; color: #bbb; }
   .error-msg { font-size: 13px; color: #c00; padding: 12px; background: #fff0f0; border-radius: 8px; }
+  .click-hint { font-size: 11px; color: #aaa; margin-bottom: 8px; }
+
+  /* モーダル */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.35); z-index: 1000;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 12px;
+    width: 90%; max-width: 640px; max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+  }
+  .modal-header {
+    padding: 1.25rem 1.5rem 1rem;
+    border-bottom: 1px solid #eee;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    flex-shrink: 0;
+  }
+  .modal-title { font-size: 16px; font-weight: 600; }
+  .modal-subtitle { font-size: 12px; color: #999; margin-top: 3px; }
+  .modal-close { font-size: 20px; color: #aaa; cursor: pointer; background: none; border: none; line-height: 1; padding: 2px 6px; }
+  .modal-close:hover { color: #333; }
+  .modal-body { overflow-y: auto; padding: 1rem 1.5rem 1.5rem; }
+  .deal-role-section { margin-bottom: 1.25rem; }
+  .deal-role-label { font-size: 11px; font-weight: 600; color: #fff; padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 8px; }
+  .deal-list { display: flex; flex-direction: column; gap: 6px; }
+  .deal-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; background: #f7f7f5; font-size: 13px; }
+  .deal-name { color: #1a1a1a; flex: 1; }
+  .deal-link { font-size: 11px; color: #7F77DD; text-decoration: none; white-space: nowrap; margin-left: 12px; }
+  .deal-link:hover { text-decoration: underline; }
+  .modal-empty { font-size: 13px; color: #aaa; padding: 1rem 0; }
 </style>
 </head>
 <body>
@@ -58,7 +92,7 @@
   <button class="tab" onclick="setTab('pm',this)">PM</button>
   <button class="tab" onclick="setTab('dir',this)">ディレクター</button>
   <button class="tab" onclick="setTab('ast',this)">アシスタント</button>
-  <button class="tab" onclick="setTab('deals',this)">担当会社数</button>
+  <button class="tab" onclick="setTab('deals',this)">取引数</button>
 </div>
 
 <div class="controls">
@@ -69,28 +103,43 @@
   <button class="sort-btn" id="sb-3" onclick="setSort(3,this)" style="display:none">—</button>
 </div>
 
+<p class="click-hint">💡 グラフの担当者名をクリックすると担当案件一覧が表示されます</p>
 <div id="legend-area" class="legend"></div>
 <div id="error-area"></div>
 <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
 
+<!-- 案件一覧モーダル -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <p class="modal-title" id="modal-title">—</p>
+        <p class="modal-subtitle" id="modal-subtitle">—</p>
+      </div>
+      <button class="modal-close" onclick="closeModalDirect()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
 // ============================================================
-// ★ ここだけ変更してください
-const DATA_URL    = 'https://kumamon-n8n.xvps.jp/webhook/hubspot-dashboard-data';
-const UPDATE_URL  = 'https://kumamon-n8n.xvps.jp/webhook/hubspot-dashboard-update';
+const DATA_URL   = 'https://kumamon-n8n.xvps.jp/webhook/hubspot-dashboard-data';
+const UPDATE_URL = 'https://kumamon-n8n.xvps.jp/webhook/hubspot-dashboard-update';
+const HS_BASE    = 'https://app.hubspot.com/contacts/243581973/record/0-3/';
 // ============================================================
 
 let pmC = {}, dirC = {}, astC = {}, dealSet = {};
 let allN = [];
+let dealsByPerson = {};
 let curTab = 'all', curSortIdx = 0, chartInst = null;
 
 const TABS = {
   all: {
-    // ★ 並び順を4種類に拡張
     sortLabels: ['合計件数順', 'PM件数順', 'ディレクター件数順', 'アシスタント件数順'],
     sortFns: [
-      (n) => (pmC[n]||0) + (dirC[n]||0) + (astC[n]||0),
+      (n) => (pmC[n]||0)+(dirC[n]||0)+(astC[n]||0),
       (n) => pmC[n]||0,
       (n) => dirC[n]||0,
       (n) => astC[n]||0,
@@ -138,6 +187,7 @@ function applyData(data) {
   dirC = data.director || {};
   astC = data.assistant || {};
   dealSet = data.deals || {};
+  dealsByPerson = data.deals_by_person || {};
   allN = [...new Set([...Object.keys(pmC),...Object.keys(dirC),...Object.keys(astC)])];
 
   document.getElementById('pm-total').textContent = Object.values(pmC).reduce((a,b)=>a+b,0);
@@ -185,13 +235,54 @@ async function manualUpdate() {
   }
 }
 
+// ── モーダル ──────────────────────────────────
+function openModal(name) {
+  const info = dealsByPerson[name] || {};
+  document.getElementById('modal-title').textContent = name;
+  const pmList  = info.pm  || [];
+  const dirList = info.dir || [];
+  const astList = info.ast || [];
+  const total = new Set([...pmList,...dirList,...astList].map(d=>d.id)).size;
+  document.getElementById('modal-subtitle').textContent = `支援中 ${total} 件`;
+
+  let html = '';
+  if (pmList.length)  html += renderSection('PM', '#5DCAA5', pmList);
+  if (dirList.length) html += renderSection('ディレクター', '#7F77DD', dirList);
+  if (astList.length) html += renderSection('アシスタント', '#EF9F27', astList);
+  if (!html) html = '<p class="modal-empty">案件情報が見つかりません</p>';
+
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function renderSection(label, color, deals) {
+  const items = deals.map(d =>
+    `<div class="deal-item">
+      <span class="deal-name">${d.name}</span>
+      <a class="deal-link" href="${HS_BASE}${d.id}" target="_blank">HubSpotで開く →</a>
+    </div>`
+  ).join('');
+  return `<div class="deal-role-section">
+    <span class="deal-role-label" style="background:${color}">${label} ${deals.length}件</span>
+    <div class="deal-list">${items}</div>
+  </div>`;
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById('modal-overlay')) closeModalDirect();
+}
+function closeModalDirect() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModalDirect(); });
+// ─────────────────────────────────────────────
+
 function buildLegend(cfg) {
   document.getElementById('legend-area').innerHTML = cfg.legend.map(l =>
     `<span><span class="leg-sq" style="background:${l.c}"></span>${l.l}</span>`).join('');
 }
 
 function buildSortBtns(cfg) {
-  // ボタンを必要数だけ表示・テキスト更新
   for (let i = 0; i < 4; i++) {
     const btn = document.getElementById('sb-' + i);
     if (i < cfg.sortLabels.length) {
@@ -227,6 +318,16 @@ function buildChart() {
       scales: {
         x: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { color: '#888', font: { size: 11 }, stepSize: 1 } },
         y: { grid: { display: false }, ticks: { color: '#555', font: { size: 12 } } }
+      },
+      onClick(event) {
+        const points = chartInst.getElementsAtEventForMode(event, 'index', { axis: 'y', intersect: false }, false);
+        if (!points.length) return;
+        const name = chartInst.data.labels[points[0].index];
+        if (name) openModal(name);
+      },
+      onHover(event) {
+        const points = chartInst.getElementsAtEventForMode(event, 'index', { axis: 'y', intersect: false }, false);
+        event.native.target.style.cursor = points.length ? 'pointer' : 'default';
       }
     }
   });
