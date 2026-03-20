@@ -64,7 +64,9 @@
 <div class="controls">
   <span class="ctrl-lbl">並び順：</span>
   <button class="sort-btn active" id="sb-0" onclick="setSort(0,this)">合計件数順</button>
-  <button class="sort-btn" id="sb-1" onclick="setSort(1,this)">役割件数順</button>
+  <button class="sort-btn" id="sb-1" onclick="setSort(1,this)">—</button>
+  <button class="sort-btn" id="sb-2" onclick="setSort(2,this)" style="display:none">—</button>
+  <button class="sort-btn" id="sb-3" onclick="setSort(3,this)" style="display:none">—</button>
 </div>
 
 <div id="legend-area" class="legend"></div>
@@ -85,8 +87,14 @@ let curTab = 'all', curSortIdx = 0, chartInst = null;
 
 const TABS = {
   all: {
-    sortLabels: ['合計件数順'],
-    sortFns: [(n) => (pmC[n]||0)+(dirC[n]||0)+(astC[n]||0)],
+    // ★ 並び順を4種類に拡張
+    sortLabels: ['合計件数順', 'PM件数順', 'ディレクター件数順', 'アシスタント件数順'],
+    sortFns: [
+      (n) => (pmC[n]||0) + (dirC[n]||0) + (astC[n]||0),
+      (n) => pmC[n]||0,
+      (n) => dirC[n]||0,
+      (n) => astC[n]||0,
+    ],
     names: () => allN,
     datasets: (names) => [
       { label:'PM', data:names.map(n=>pmC[n]||0), backgroundColor:'#5DCAA5' },
@@ -183,17 +191,16 @@ function buildLegend(cfg) {
 }
 
 function buildSortBtns(cfg) {
-  const b0 = document.getElementById('sb-0');
-  const b1 = document.getElementById('sb-1');
-  b0.textContent = cfg.sortLabels[0];
-  b0.classList.toggle('active', curSortIdx === 0);
-  if (cfg.sortLabels.length > 1) {
-    b1.textContent = cfg.sortLabels[1];
-    b1.style.display = '';
-    b1.classList.toggle('active', curSortIdx === 1);
-  } else {
-    b1.style.display = 'none';
-    curSortIdx = 0;
+  // ボタンを必要数だけ表示・テキスト更新
+  for (let i = 0; i < 4; i++) {
+    const btn = document.getElementById('sb-' + i);
+    if (i < cfg.sortLabels.length) {
+      btn.textContent = cfg.sortLabels[i];
+      btn.style.display = '';
+      btn.classList.toggle('active', curSortIdx === i);
+    } else {
+      btn.style.display = 'none';
+    }
   }
 }
 
